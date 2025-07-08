@@ -7,7 +7,7 @@ echo "🎯 最终数据库解决方案"
 echo "===================="
 echo "策略：配置数据库连接 + 工具功能独立"
 echo "数据库：calculator_platform"
-echo "用户：besthammer_c_usr"
+echo "用户：calculator__usr"
 echo ""
 
 # 颜色定义
@@ -59,6 +59,7 @@ echo ""
 echo "  🗄️ FastPanel数据库配置："
 echo "  - besthammer_c (通用数据库)"
 echo "  - calculator_platform (计算器平台专用) ✅ 推荐"
+echo "  - 数据库用户：calculator__usr"
 
 log_step "第2步：配置calculator_platform数据库连接"
 echo "-----------------------------------"
@@ -66,7 +67,7 @@ echo "-----------------------------------"
 cd "$PROJECT_DIR"
 
 # 获取数据库密码
-echo "请输入FastPanel中besthammer_c_usr用户的数据库密码："
+echo "请输入FastPanel中calculator__usr用户的数据库密码："
 read -s DB_PASSWORD
 echo ""
 
@@ -77,7 +78,7 @@ fi
 
 # 测试数据库连接
 log_info "测试数据库连接..."
-mysql -u besthammer_c_usr -p"$DB_PASSWORD" -e "USE calculator_platform; SELECT 1;" 2>/dev/null
+mysql -u calculator__usr -p"$DB_PASSWORD" -e "USE calculator_platform; SELECT 1;" 2>/dev/null
 
 if [ $? -eq 0 ]; then
     log_success "数据库连接测试成功"
@@ -98,7 +99,7 @@ sed -i "s/^DB_CONNECTION=.*/DB_CONNECTION=mysql/" .env
 sed -i "s/^DB_HOST=.*/DB_HOST=127.0.0.1/" .env
 sed -i "s/^DB_PORT=.*/DB_PORT=3306/" .env
 sed -i "s/^DB_DATABASE=.*/DB_DATABASE=calculator_platform/" .env
-sed -i "s/^DB_USERNAME=.*/DB_USERNAME=besthammer_c_usr/" .env
+sed -i "s/^DB_USERNAME=.*/DB_USERNAME=calculator__usr/" .env
 sed -i "s/^DB_PASSWORD=.*/DB_PASSWORD=$DB_PASSWORD/" .env
 
 # 配置缓存和会话使用文件而非数据库
@@ -551,7 +552,7 @@ try {
             <tr class="<?php echo $dbWorking ? 'status-ok' : 'status-warning'; ?>">
                 <td>数据库连接</td>
                 <td><?php echo $dbWorking ? '✅ 正常' : '⚠️ 异常'; ?></td>
-                <td><?php echo $dbWorking ? 'calculator_platform数据库连接正常' : $dbError; ?></td>
+                <td><?php echo $dbWorking ? 'calculator_platform数据库连接正常 (用户: calculator__usr)' : $dbError; ?></td>
             </tr>
             
             <tr class="<?php echo $tableExists ? 'status-ok' : 'status-warning'; ?>">
@@ -602,7 +603,7 @@ try {
             <tr><td>项目名称</td><td>BestHammer - 欧美工具平台</td></tr>
             <tr><td>目标市场</td><td>欧美高频刚需市场</td></tr>
             <tr><td>核心功能</td><td>贷款+BMI+汇率计算器</td></tr>
-            <tr><td>数据库</td><td>calculator_platform (可选使用)</td></tr>
+            <tr><td>数据库</td><td>calculator_platform (用户: calculator__usr)</td></tr>
             <tr><td>部署环境</td><td>FastPanel + Nginx + Apache</td></tr>
             <tr><td>CDN服务</td><td>Cloudflare</td></tr>
         </table>
@@ -644,7 +645,7 @@ echo "✅ 为未来扩展预留了数据库基础"
 echo ""
 echo "🗄️ 数据库配置："
 echo "   数据库: calculator_platform"
-echo "   用户: besthammer_c_usr"
+echo "   用户: calculator__usr"
 echo "   状态: 已连接并测试"
 echo ""
 echo "🧪 最终验证："
