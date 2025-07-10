@@ -57,10 +57,29 @@ fi
 
 PROJECT_DIR="/var/www/besthammer_c_usr/data/www/besthammer.club"
 
-cd "$PROJECT_DIR" || {
+# 环境预检查
+log_info "执行环境预检查..."
+
+# 检查项目目录是否存在
+if [ ! -d "$PROJECT_DIR" ]; then
+    log_error "项目目录不存在: $PROJECT_DIR"
+    exit 1
+fi
+
+# 检查是否可以进入项目目录
+if ! cd "$PROJECT_DIR" 2>/dev/null; then
     log_error "无法进入项目目录: $PROJECT_DIR"
     exit 1
 fi
+
+# 检查基本命令是否可用
+for cmd in php mysql curl; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        log_warning "$cmd 命令不可用"
+    fi
+done
+
+log_success "环境预检查完成"
 
 # 创建诊断报告文件
 REPORT_FILE="diagnosis_500_errors_$(date +%Y%m%d_%H%M%S).txt"
@@ -158,9 +177,39 @@ log_check "检查Composer自动加载..."
 if [ -f "vendor/autoload.php" ]; then
     log_success "Composer自动加载文件存在"
     echo "✓ Composer自动加载文件存在" >> "$REPORT_FILE"
+
+    # 检查自动加载文件语法
+    if php -l vendor/autoload.php > /dev/null 2>&1; then
+        echo "  自动加载文件语法正确" >> "$REPORT_FILE"
+    else
+        log_error "自动加载文件语法错误"
+        echo "✗ 自动加载文件语法错误" >> "$REPORT_FILE"
+    fi
+
+    # 检查composer.json
+    if [ -f "composer.json" ]; then
+        echo "✓ composer.json存在" >> "$REPORT_FILE"
+
+        # 检查composer.json语法
+        if php -r "json_decode(file_get_contents('composer.json')); if (json_last_error() !== JSON_ERROR_NONE) exit(1);" 2>/dev/null; then
+            echo "  composer.json语法正确" >> "$REPORT_FILE"
+        else
+            log_error "composer.json语法错误"
+            echo "✗ composer.json语法错误" >> "$REPORT_FILE"
+        fi
+    else
+        log_error "composer.json不存在"
+        echo "✗ composer.json不存在" >> "$REPORT_FILE"
+    fi
+
+    # 检查vendor目录权限
+    vendor_owner=$(ls -ld vendor | awk '{print $3}')
+    echo "vendor目录所有者: $vendor_owner" >> "$REPORT_FILE"
+
 else
     log_error "Composer自动加载文件不存在"
     echo "✗ Composer自动加载文件不存在" >> "$REPORT_FILE"
+    echo "建议运行: composer install" >> "$REPORT_FILE"
 fi
 
 log_step "第4步：文件权限和所有权验证"
@@ -175,13 +224,29 @@ for dir in "${critical_dirs[@]}"; do
     if [ -d "$dir" ]; then
         permissions=$(ls -ld "$dir" | awk '{print $1, $3, $4}')
         echo "$dir: $permissions" >> "$REPORT_FILE"
-        
+
+        # 检查所有者
+        owner=$(ls -ld "$dir" | awk '{print $3}')
+        group=$(ls -ld "$dir" | awk '{print $4}')
+
+        if [ "$owner" = "besthammer_c_usr" ]; then
+            log_success "$dir: 所有者正确 ($owner)"
+        else
+            log_warning "$dir: 所有者不正确 ($owner, 应该是 besthammer_c_usr)"
+        fi
+
         # 检查是否可写
         if [ -w "$dir" ]; then
             log_success "$dir: 可写"
         else
             log_error "$dir: 不可写"
+            echo "✗ $dir: 不可写" >> "$REPORT_FILE"
         fi
+
+        # 检查具体权限值
+        perm_octal=$(stat -c "%a" "$dir" 2>/dev/null || echo "unknown")
+        echo "  八进制权限: $perm_octal" >> "$REPORT_FILE"
+
     else
         log_error "$dir: 目录不存在"
         echo "✗ $dir: 目录不存在" >> "$REPORT_FILE"
@@ -266,16 +331,35 @@ if [ -f ".env" ]; then
     
     # 测试数据库连接
     if [ -n "$DB_HOST" ] && [ -n "$DB_DATABASE" ] && [ -n "$DB_USERNAME" ]; then
-        if mysql -h"$DB_HOST" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "USE $DB_DATABASE;" 2>/dev/null; then
-            log_success "数据库连接正常"
-            echo "✓ 数据库连接正常" >> "$REPORT_FILE"
+        if [ -n "$DB_PASSWORD" ]; then
+            # 有密码的连接
+            if mysql -h"$DB_HOST" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "USE $DB_DATABASE;" 2>/dev/null; then
+                log_success "数据库连接正常"
+                echo "✓ 数据库连接正常" >> "$REPORT_FILE"
+            else
+                log_error "数据库连接失败"
+                echo "✗ 数据库连接失败" >> "$REPORT_FILE"
+                # 尝试获取连接错误信息
+                mysql -h"$DB_HOST" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "USE $DB_DATABASE;" >> "$REPORT_FILE" 2>&1 || true
+            fi
         else
-            log_error "数据库连接失败"
-            echo "✗ 数据库连接失败" >> "$REPORT_FILE"
+            # 无密码的连接
+            if mysql -h"$DB_HOST" -u"$DB_USERNAME" -e "USE $DB_DATABASE;" 2>/dev/null; then
+                log_success "数据库连接正常"
+                echo "✓ 数据库连接正常" >> "$REPORT_FILE"
+            else
+                log_error "数据库连接失败"
+                echo "✗ 数据库连接失败" >> "$REPORT_FILE"
+                mysql -h"$DB_HOST" -u"$DB_USERNAME" -e "USE $DB_DATABASE;" >> "$REPORT_FILE" 2>&1 || true
+            fi
         fi
     else
         log_warning "数据库配置不完整"
         echo "⚠ 数据库配置不完整" >> "$REPORT_FILE"
+        echo "缺少的配置项:" >> "$REPORT_FILE"
+        [ -z "$DB_HOST" ] && echo "- DB_HOST" >> "$REPORT_FILE"
+        [ -z "$DB_DATABASE" ] && echo "- DB_DATABASE" >> "$REPORT_FILE"
+        [ -z "$DB_USERNAME" ] && echo "- DB_USERNAME" >> "$REPORT_FILE"
     fi
 else
     log_error ".env文件不存在"
@@ -316,20 +400,42 @@ fi
 
 # 尝试运行Laravel命令检查
 log_check "测试Laravel命令..."
-if sudo -u besthammer_c_usr php artisan --version > /dev/null 2>&1; then
-    log_success "Laravel命令可以执行"
-    echo "✓ Laravel命令可以执行" >> "$REPORT_FILE"
-    
-    # 获取Laravel版本
-    laravel_version=$(sudo -u besthammer_c_usr php artisan --version 2>/dev/null)
-    echo "Laravel版本: $laravel_version" >> "$REPORT_FILE"
+
+# 首先检查artisan文件是否存在
+if [ ! -f "artisan" ]; then
+    log_error "artisan文件不存在"
+    echo "✗ artisan文件不存在" >> "$REPORT_FILE"
+elif [ ! -x "artisan" ]; then
+    log_warning "artisan文件不可执行"
+    echo "⚠ artisan文件不可执行" >> "$REPORT_FILE"
+    # 尝试修复权限
+    chmod +x artisan 2>/dev/null || true
 else
-    log_error "Laravel命令执行失败"
-    echo "✗ Laravel命令执行失败" >> "$REPORT_FILE"
-    
-    # 尝试获取错误信息
-    echo "Laravel命令错误信息:" >> "$REPORT_FILE"
-    sudo -u besthammer_c_usr php artisan --version >> "$REPORT_FILE" 2>&1
+    # 测试Laravel命令
+    if timeout 30 sudo -u besthammer_c_usr php artisan --version > /dev/null 2>&1; then
+        log_success "Laravel命令可以执行"
+        echo "✓ Laravel命令可以执行" >> "$REPORT_FILE"
+
+        # 获取Laravel版本
+        laravel_version=$(timeout 30 sudo -u besthammer_c_usr php artisan --version 2>/dev/null || echo "版本获取失败")
+        echo "Laravel版本: $laravel_version" >> "$REPORT_FILE"
+
+        # 测试其他关键命令
+        echo "测试其他Laravel命令:" >> "$REPORT_FILE"
+        if timeout 30 sudo -u besthammer_c_usr php artisan route:list --compact > /dev/null 2>&1; then
+            echo "✓ route:list 命令正常" >> "$REPORT_FILE"
+        else
+            echo "✗ route:list 命令失败" >> "$REPORT_FILE"
+        fi
+
+    else
+        log_error "Laravel命令执行失败"
+        echo "✗ Laravel命令执行失败" >> "$REPORT_FILE"
+
+        # 尝试获取错误信息
+        echo "Laravel命令错误信息:" >> "$REPORT_FILE"
+        timeout 30 sudo -u besthammer_c_usr php artisan --version >> "$REPORT_FILE" 2>&1 || echo "命令超时或失败" >> "$REPORT_FILE"
+    fi
 fi
 
 log_step "第8步：特定500错误URL测试"
@@ -350,25 +456,35 @@ for url in "${error_urls[@]}"; do
     echo "测试URL: $url" >> "$REPORT_FILE"
 
     # 使用curl获取详细错误信息
-    response=$(curl -s -w "HTTP_CODE:%{http_code}" "https://www.besthammer.club$url" 2>&1)
-    http_code=$(echo "$response" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+    response=$(curl -s -w "HTTP_CODE:%{http_code}" "https://www.besthammer.club$url" 2>&1 || echo "CURL_ERROR")
 
-    echo "HTTP状态码: $http_code" >> "$REPORT_FILE"
-
-    if [ "$http_code" = "500" ]; then
-        log_error "$url: HTTP 500"
-        echo "✗ $url: HTTP 500" >> "$REPORT_FILE"
-
-        # 尝试获取错误页面内容
-        error_content=$(echo "$response" | sed 's/HTTP_CODE:[0-9]*//g')
-        if [ -n "$error_content" ]; then
-            echo "错误页面内容（前500字符）:" >> "$REPORT_FILE"
-            echo "$error_content" | head -c 500 >> "$REPORT_FILE"
-            echo "" >> "$REPORT_FILE"
-        fi
+    if echo "$response" | grep -q "CURL_ERROR"; then
+        echo "CURL连接错误" >> "$REPORT_FILE"
+        log_error "$url: CURL连接失败"
     else
-        log_success "$url: HTTP $http_code"
-        echo "✓ $url: HTTP $http_code" >> "$REPORT_FILE"
+        http_code=$(echo "$response" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+
+        if [ -z "$http_code" ]; then
+            http_code="UNKNOWN"
+        fi
+
+        echo "HTTP状态码: $http_code" >> "$REPORT_FILE"
+
+        if [ "$http_code" = "500" ]; then
+            log_error "$url: HTTP 500"
+            echo "✗ $url: HTTP 500" >> "$REPORT_FILE"
+
+            # 尝试获取错误页面内容
+            error_content=$(echo "$response" | sed 's/HTTP_CODE:[0-9]*//g')
+            if [ -n "$error_content" ] && [ ${#error_content} -gt 10 ]; then
+                echo "错误页面内容（前500字符）:" >> "$REPORT_FILE"
+                echo "$error_content" | head -c 500 >> "$REPORT_FILE"
+                echo "" >> "$REPORT_FILE"
+            fi
+        else
+            log_success "$url: HTTP $http_code"
+            echo "✓ $url: HTTP $http_code" >> "$REPORT_FILE"
+        fi
     fi
     echo "---" >> "$REPORT_FILE"
 done
@@ -390,19 +506,30 @@ critical_classes=(
 for class in "${critical_classes[@]}"; do
     echo "检查类: $class" >> "$REPORT_FILE"
 
-    # 尝试加载类
-    if sudo -u besthammer_c_usr php -r "
-        require_once 'vendor/autoload.php';
-        try {
-            if (class_exists('$class')) {
-                echo 'SUCCESS: Class exists';
-            } else {
-                echo 'ERROR: Class not found';
-            }
-        } catch (Exception \$e) {
-            echo 'ERROR: ' . \$e->getMessage();
-        }
-    " 2>/dev/null | grep -q "SUCCESS"; then
+    # 创建临时PHP脚本来测试类加载
+    temp_script="/tmp/class_test_$$.php"
+    cat > "$temp_script" << EOF
+<?php
+try {
+    require_once '$PROJECT_DIR/vendor/autoload.php';
+    if (class_exists('$class')) {
+        echo 'SUCCESS: Class exists';
+        exit(0);
+    } else {
+        echo 'ERROR: Class not found';
+        exit(1);
+    }
+} catch (Exception \$e) {
+    echo 'ERROR: ' . \$e->getMessage();
+    exit(1);
+} catch (Error \$e) {
+    echo 'FATAL: ' . \$e->getMessage();
+    exit(1);
+}
+EOF
+
+    # 运行测试脚本
+    if sudo -u besthammer_c_usr php "$temp_script" 2>/dev/null | grep -q "SUCCESS"; then
         log_success "$class: 可以加载"
         echo "✓ $class: 可以加载" >> "$REPORT_FILE"
     else
@@ -410,16 +537,12 @@ for class in "${critical_classes[@]}"; do
         echo "✗ $class: 无法加载" >> "$REPORT_FILE"
 
         # 获取具体错误
-        error_msg=$(sudo -u besthammer_c_usr php -r "
-            require_once 'vendor/autoload.php';
-            try {
-                class_exists('$class');
-            } catch (Exception \$e) {
-                echo \$e->getMessage();
-            }
-        " 2>&1)
+        error_msg=$(sudo -u besthammer_c_usr php "$temp_script" 2>&1)
         echo "错误信息: $error_msg" >> "$REPORT_FILE"
     fi
+
+    # 清理临时文件
+    rm -f "$temp_script"
 done
 
 log_step "第10步：配置文件完整性检查"
@@ -450,7 +573,53 @@ for config in "${config_files[@]}"; do
     fi
 done
 
-log_step "第11步：生成诊断总结和建议"
+log_step "第11步：环境变量和.env文件检查"
+echo "-----------------------------------"
+
+log_check "检查环境变量配置..."
+echo "=== 环境变量检查 ===" >> "$REPORT_FILE"
+
+if [ -f ".env" ]; then
+    log_success ".env文件存在"
+    echo "✓ .env文件存在" >> "$REPORT_FILE"
+
+    # 检查关键环境变量
+    echo "关键环境变量检查:" >> "$REPORT_FILE"
+
+    env_vars=("APP_ENV" "APP_DEBUG" "APP_KEY" "DB_CONNECTION" "DB_HOST" "DB_DATABASE")
+    for var in "${env_vars[@]}"; do
+        if grep -q "^${var}=" .env; then
+            value=$(grep "^${var}=" .env | cut -d'=' -f2)
+            if [ -n "$value" ]; then
+                echo "✓ $var: 已设置" >> "$REPORT_FILE"
+            else
+                echo "⚠ $var: 已定义但为空" >> "$REPORT_FILE"
+                log_warning "$var: 已定义但为空"
+            fi
+        else
+            echo "✗ $var: 未设置" >> "$REPORT_FILE"
+            log_error "$var: 未设置"
+        fi
+    done
+
+    # 检查APP_KEY
+    if grep -q "^APP_KEY=" .env; then
+        app_key=$(grep "^APP_KEY=" .env | cut -d'=' -f2)
+        if [ -z "$app_key" ] || [ "$app_key" = "base64:" ]; then
+            echo "⚠ APP_KEY未正确生成" >> "$REPORT_FILE"
+            log_warning "APP_KEY未正确生成，建议运行: php artisan key:generate"
+        else
+            echo "✓ APP_KEY已正确设置" >> "$REPORT_FILE"
+        fi
+    fi
+
+else
+    log_error ".env文件不存在"
+    echo "✗ .env文件不存在" >> "$REPORT_FILE"
+    echo "建议从.env.example复制: cp .env.example .env" >> "$REPORT_FILE"
+fi
+
+log_step "第12步：生成诊断总结和建议"
 echo "-----------------------------------"
 
 echo "" >> "$REPORT_FILE"
@@ -462,9 +631,25 @@ echo "" >> "$REPORT_FILE"
 echo "可能的500错误原因分析:" >> "$REPORT_FILE"
 
 # 检查是否是类加载问题
-if ! sudo -u besthammer_c_usr php -r "require_once 'vendor/autoload.php'; class_exists('App\\Services\\FeatureService');" 2>/dev/null; then
+temp_test="/tmp/feature_test_$$.php"
+cat > "$temp_test" << 'EOF'
+<?php
+try {
+    require_once '/var/www/besthammer_c_usr/data/www/besthammer.club/vendor/autoload.php';
+    if (class_exists('App\Services\FeatureService')) {
+        exit(0);
+    } else {
+        exit(1);
+    }
+} catch (Exception $e) {
+    exit(1);
+}
+EOF
+
+if ! sudo -u besthammer_c_usr php "$temp_test" 2>/dev/null; then
     echo "1. FeatureService类无法加载 - 可能是自动加载问题" >> "$REPORT_FILE"
 fi
+rm -f "$temp_test"
 
 # 检查是否是配置问题
 if [ ! -f "config/features.php" ]; then
@@ -481,6 +666,19 @@ if ! php -l routes/web.php > /dev/null 2>&1; then
     echo "4. 路由文件语法错误" >> "$REPORT_FILE"
 fi
 
+# 检查是否是APP_KEY问题
+if [ -f ".env" ]; then
+    app_key=$(grep "^APP_KEY=" .env | cut -d'=' -f2 2>/dev/null)
+    if [ -z "$app_key" ] || [ "$app_key" = "base64:" ]; then
+        echo "5. APP_KEY未正确设置" >> "$REPORT_FILE"
+    fi
+fi
+
+# 检查是否是FeatureService相关问题
+if grep -q "FeatureService" storage/logs/laravel.log 2>/dev/null; then
+    echo "6. FeatureService相关错误（检查日志）" >> "$REPORT_FILE"
+fi
+
 echo ""
 echo "🔍 诊断完成！"
 echo "============"
@@ -493,10 +691,26 @@ echo "🚨 发现的主要问题："
 issues_found=0
 
 # 检查FeatureService
-if ! sudo -u besthammer_c_usr php -r "require_once 'vendor/autoload.php'; class_exists('App\\Services\\FeatureService');" 2>/dev/null; then
+temp_check="/tmp/quick_check_$$.php"
+cat > "$temp_check" << 'EOF'
+<?php
+try {
+    require_once '/var/www/besthammer_c_usr/data/www/besthammer.club/vendor/autoload.php';
+    if (class_exists('App\Services\FeatureService')) {
+        exit(0);
+    } else {
+        exit(1);
+    }
+} catch (Exception $e) {
+    exit(1);
+}
+EOF
+
+if ! sudo -u besthammer_c_usr php "$temp_check" 2>/dev/null; then
     echo "❌ FeatureService类无法加载"
     ((issues_found++))
 fi
+rm -f "$temp_check"
 
 # 检查配置文件
 if [ ! -f "config/features.php" ]; then
@@ -530,8 +744,11 @@ echo "🔧 建议的修复步骤："
 echo "1. 查看完整诊断报告: cat $REPORT_FILE"
 echo "2. 检查Laravel错误日志: tail -50 storage/logs/laravel.log"
 echo "3. 检查Apache错误日志: tail -20 /var/log/apache2/error.log"
-echo "4. 清理所有缓存: php artisan cache:clear && php artisan config:clear"
+echo "4. 清理所有缓存: php artisan cache:clear && php artisan config:clear && php artisan route:clear"
 echo "5. 重新生成自动加载: composer dump-autoload"
+echo "6. 检查文件权限: chown -R besthammer_c_usr:besthammer_c_usr storage bootstrap/cache"
+echo "7. 如果APP_KEY为空: php artisan key:generate"
+echo "8. 如果FeatureService错误: 检查config/features.php是否存在且语法正确"
 
 if [ $issues_found -gt 0 ]; then
     echo ""
