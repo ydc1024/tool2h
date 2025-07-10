@@ -57,7 +57,7 @@ PROJECT_DIR="/var/www/besthammer_c_usr/data/www/besthammer.club"
 cd "$PROJECT_DIR" || {
     log_error "无法进入项目目录: $PROJECT_DIR"
     exit 1
-fi
+}
 
 # 创建诊断报告文件
 REPORT_FILE="diagnosis_report_$(date +%Y%m%d_%H%M%S).txt"
